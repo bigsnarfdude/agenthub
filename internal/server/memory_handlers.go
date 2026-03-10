@@ -8,8 +8,25 @@ import (
 	"agenthub/internal/db"
 )
 
+var validMemoryKinds = map[string]bool{
+	"fact":    true,
+	"failure": true,
+	"hunch":   true,
+}
+
 func (s *Server) handlePostMemory(w http.ResponseWriter, r *http.Request) {
 	agent := auth.AgentFromContext(r.Context())
+
+	// Rate limit
+	allowed, err := s.db.CheckRateLimit(agent.ID, "post", s.config.MaxPostsPerHour)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rate limit check failed")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusTooManyRequests, "post rate limit exceeded")
+		return
+	}
 
 	var req struct {
 		Kind    string `json:"kind"`
@@ -20,7 +37,7 @@ func (s *Server) handlePostMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.Kind != "fact" && req.Kind != "failure" && req.Kind != "hunch" {
+	if !validMemoryKinds[req.Kind] {
 		writeError(w, http.StatusBadRequest, "kind must be fact, failure, or hunch")
 		return
 	}
@@ -34,6 +51,8 @@ func (s *Server) handlePostMemory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to insert memory")
 		return
 	}
+
+	s.db.IncrementRateLimit(agent.ID, "post")
 
 	writeJSON(w, http.StatusCreated, mem)
 }
