@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install git (required runtime dependency)
+        run: sudo apt-get install -y git
+
+      - name: Run tests
+        run: go test ./... -v -race -timeout 60s
+
+      - name: Build server
+        run: go build ./cmd/agenthub-server
+
+      - name: Build CLI
+        run: go build ./cmd/ah
