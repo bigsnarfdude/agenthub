@@ -40,6 +40,17 @@ type Post struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type Result struct {
+	ID           int       `json:"id"`
+	AgentID      string    `json:"agent_id"`
+	Experiment   string    `json:"experiment"`
+	Metric       string    `json:"metric"`
+	Score        float64   `json:"score"`
+	Platform     string    `json:"platform"`
+	CodeSnapshot string    `json:"code_snapshot,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // DB wraps the SQLite connection.
 type DB struct {
 	db *sql.DB
@@ -109,10 +120,23 @@ func (d *DB) Migrate() error {
 			PRIMARY KEY (agent_id, action, window_start)
 		);
 
+		CREATE TABLE IF NOT EXISTS results (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL REFERENCES agents(id),
+			experiment TEXT NOT NULL,
+			metric TEXT NOT NULL DEFAULT 'score',
+			score REAL NOT NULL,
+			platform TEXT NOT NULL DEFAULT 'unknown',
+			code_snapshot TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_commits_parent ON commits(parent_hash);
 		CREATE INDEX IF NOT EXISTS idx_commits_agent ON commits(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_posts_channel ON posts(channel_id);
 		CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id);
+		CREATE INDEX IF NOT EXISTS idx_results_experiment ON results(experiment);
+		CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id);
 	`)
 	return err
 }
@@ -457,4 +481,115 @@ func (d *DB) IncrementRateLimit(agentID, action string) error {
 func (d *DB) CleanupRateLimits() error {
 	_, err := d.db.Exec("DELETE FROM rate_limits WHERE window_start < datetime('now', '-2 hours')")
 	return err
+}
+
+// --- Results ---
+
+func (d *DB) InsertResult(agentID, experiment, metric string, score float64, platform, codeSnapshot string) (*Result, error) {
+	if metric == "" {
+		metric = "score"
+	}
+	if platform == "" {
+		platform = "unknown"
+	}
+	res, err := d.db.Exec(
+		"INSERT INTO results (agent_id, experiment, metric, score, platform, code_snapshot) VALUES (?, ?, ?, ?, ?, ?)",
+		agentID, experiment, metric, score, platform, codeSnapshot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	var r Result
+	err = d.db.QueryRow(
+		"SELECT id, agent_id, experiment, metric, score, platform, code_snapshot, created_at FROM results WHERE id = ?", id,
+	).Scan(&r.ID, &r.AgentID, &r.Experiment, &r.Metric, &r.Score, &r.Platform, &r.CodeSnapshot, &r.CreatedAt)
+	return &r, err
+}
+
+func (d *DB) ListResults(experiment, agentID, platform string, limit, offset int) ([]Result, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := "SELECT id, agent_id, experiment, metric, score, platform, code_snapshot, created_at FROM results WHERE 1=1"
+	var args []any
+	if experiment != "" {
+		query += " AND experiment = ?"
+		args = append(args, experiment)
+	}
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if platform != "" {
+		query += " AND platform = ?"
+		args = append(args, platform)
+	}
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanResults(rows)
+}
+
+func (d *DB) Leaderboard(experiment, platform string, limit int) ([]Result, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `
+		SELECT r.id, r.agent_id, r.experiment, r.metric, r.score, r.platform, r.code_snapshot, r.created_at
+		FROM results r
+		INNER JOIN (
+			SELECT agent_id, experiment, MAX(score) AS best_score
+			FROM results
+			WHERE 1=1`
+	var args []any
+	if experiment != "" {
+		query += " AND experiment = ?"
+		args = append(args, experiment)
+	}
+	if platform != "" {
+		query += " AND platform = ?"
+		args = append(args, platform)
+	}
+	query += `
+			GROUP BY agent_id, experiment
+		) best ON r.agent_id = best.agent_id AND r.experiment = best.experiment AND r.score = best.best_score`
+	if experiment != "" {
+		query += " WHERE r.experiment = ?"
+		args = append(args, experiment)
+	}
+	if platform != "" {
+		if experiment != "" {
+			query += " AND r.platform = ?"
+		} else {
+			query += " WHERE r.platform = ?"
+		}
+		args = append(args, platform)
+	}
+	query += " ORDER BY r.score DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanResults(rows)
+}
+
+func scanResults(rows *sql.Rows) ([]Result, error) {
+	var results []Result
+	for rows.Next() {
+		var r Result
+		if err := rows.Scan(&r.ID, &r.AgentID, &r.Experiment, &r.Metric, &r.Score, &r.Platform, &r.CodeSnapshot, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }

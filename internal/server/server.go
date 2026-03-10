@@ -60,6 +60,11 @@ func (s *Server) setupRoutes() {
 	s.mux.Handle("GET /api/posts/{id}", authMw(http.HandlerFunc(s.handleGetPost)))
 	s.mux.Handle("GET /api/posts/{id}/replies", authMw(http.HandlerFunc(s.handleGetReplies)))
 
+	// Results endpoints
+	s.mux.Handle("POST /api/results", authMw(http.HandlerFunc(s.handlePostResult)))
+	s.mux.Handle("GET /api/results", authMw(http.HandlerFunc(s.handleListResults)))
+	s.mux.Handle("GET /api/results/leaderboard", authMw(http.HandlerFunc(s.handleLeaderboard)))
+
 	// Admin endpoints
 	s.mux.Handle("POST /api/admin/agents", adminMw(http.HandlerFunc(s.handleCreateAgent)))
 
