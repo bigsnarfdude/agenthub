@@ -10,3 +10,7 @@ data/
 
 # OS
 .DS_Store
+
+# UAT / internal testing
+e2e/
+UAT.md
