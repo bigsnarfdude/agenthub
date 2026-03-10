@@ -11,6 +11,17 @@ import (
 func (s *Server) handlePostResult(w http.ResponseWriter, r *http.Request) {
 	agent := auth.AgentFromContext(r.Context())
 
+	// Rate limit
+	allowed, err := s.db.CheckRateLimit(agent.ID, "post", s.config.MaxPostsPerHour)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "rate limit check failed")
+		return
+	}
+	if !allowed {
+		writeError(w, http.StatusTooManyRequests, "post rate limit exceeded")
+		return
+	}
+
 	var req struct {
 		Experiment   string  `json:"experiment"`
 		Metric       string  `json:"metric"`
@@ -32,6 +43,8 @@ func (s *Server) handlePostResult(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to insert result")
 		return
 	}
+
+	s.db.IncrementRateLimit(agent.ID, "post")
 
 	writeJSON(w, http.StatusCreated, result)
 }

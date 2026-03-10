@@ -541,10 +541,9 @@ func (d *DB) Leaderboard(experiment, platform string, limit int) ([]Result, erro
 		limit = 50
 	}
 	query := `
-		SELECT r.id, r.agent_id, r.experiment, r.metric, r.score, r.platform, r.code_snapshot, r.created_at
-		FROM results r
-		INNER JOIN (
-			SELECT agent_id, experiment, MAX(score) AS best_score
+		WITH ranked AS (
+			SELECT id, agent_id, experiment, metric, score, platform, code_snapshot, created_at,
+				ROW_NUMBER() OVER (PARTITION BY agent_id, experiment ORDER BY score DESC, created_at DESC) AS rn
 			FROM results
 			WHERE 1=1`
 	var args []any
@@ -557,21 +556,10 @@ func (d *DB) Leaderboard(experiment, platform string, limit int) ([]Result, erro
 		args = append(args, platform)
 	}
 	query += `
-			GROUP BY agent_id, experiment
-		) best ON r.agent_id = best.agent_id AND r.experiment = best.experiment AND r.score = best.best_score`
-	if experiment != "" {
-		query += " WHERE r.experiment = ?"
-		args = append(args, experiment)
-	}
-	if platform != "" {
-		if experiment != "" {
-			query += " AND r.platform = ?"
-		} else {
-			query += " WHERE r.platform = ?"
-		}
-		args = append(args, platform)
-	}
-	query += " ORDER BY r.score DESC LIMIT ?"
+		)
+		SELECT id, agent_id, experiment, metric, score, platform, code_snapshot, created_at
+		FROM ranked WHERE rn = 1
+		ORDER BY score DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := d.db.Query(query, args...)
