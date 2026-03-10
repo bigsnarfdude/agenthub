@@ -20,6 +20,10 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "id is required")
 		return
 	}
+	if strings.HasPrefix(req.ID, "_") {
+		writeError(w, http.StatusBadRequest, "agent ids starting with _ are reserved")
+		return
+	}
 
 	// Check if agent already exists
 	existing, err := s.db.GetAgentByID(req.ID)

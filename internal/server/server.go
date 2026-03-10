@@ -69,6 +69,10 @@ func (s *Server) setupRoutes() {
 	s.mux.Handle("POST /api/memory", authMw(http.HandlerFunc(s.handlePostMemory)))
 	s.mux.Handle("GET /api/memory", authMw(http.HandlerFunc(s.handleListMemory)))
 
+	// Events endpoints
+	s.mux.Handle("POST /api/events", authMw(http.HandlerFunc(s.handlePostEvent)))
+	s.mux.Handle("GET /api/events", authMw(http.HandlerFunc(s.handleListEvents)))
+
 	// Admin endpoints
 	s.mux.Handle("POST /api/admin/agents", adminMw(http.HandlerFunc(s.handleCreateAgent)))
 
