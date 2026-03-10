@@ -40,6 +40,15 @@ type Post struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type Event struct {
+	ID        int       `json:"id"`
+	AgentID   string    `json:"agent_id"`
+	EventType string    `json:"event_type"`
+	Payload   string    `json:"payload"`
+	Tags      string    `json:"tags"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Result struct {
 	ID           int       `json:"id"`
 	AgentID      string    `json:"agent_id"`
@@ -135,8 +144,19 @@ func (d *DB) Migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_commits_agent ON commits(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_posts_channel ON posts(channel_id);
 		CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id);
+		CREATE TABLE IF NOT EXISTS events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL REFERENCES agents(id),
+			event_type TEXT NOT NULL,
+			payload TEXT NOT NULL DEFAULT '',
+			tags TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_results_experiment ON results(experiment);
 		CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id);
+		CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+		CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
 	`)
 	return err
 }
@@ -592,4 +612,94 @@ func scanResults(rows *sql.Rows) ([]Result, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// --- Events ---
+
+func (d *DB) InsertEvent(agentID, eventType, payload, tags string) (*Event, error) {
+	res, err := d.db.Exec(
+		"INSERT INTO events (agent_id, event_type, payload, tags) VALUES (?, ?, ?, ?)",
+		agentID, eventType, payload, tags,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	var e Event
+	err = d.db.QueryRow(
+		"SELECT id, agent_id, event_type, payload, tags, created_at FROM events WHERE id = ?", id,
+	).Scan(&e.ID, &e.AgentID, &e.EventType, &e.Payload, &e.Tags, &e.CreatedAt)
+	return &e, err
+}
+
+func (d *DB) ListEvents(eventType, agentID, tags string, limit, offset int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := "SELECT id, agent_id, event_type, payload, tags, created_at FROM events WHERE 1=1"
+	var args []any
+	if eventType != "" {
+		query += " AND event_type = ?"
+		args = append(args, eventType)
+	}
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if tags != "" {
+		query += " AND tags LIKE ?"
+		args = append(args, "%"+tags+"%")
+	}
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.AgentID, &e.EventType, &e.Payload, &e.Tags, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// CountRecentFailures counts FAILURE events for an experiment within the last hour.
+func (d *DB) CountRecentFailures(experiment string) (int, error) {
+	var count int
+	err := d.db.QueryRow(
+		"SELECT COUNT(DISTINCT agent_id) FROM events WHERE event_type = 'FAILURE' AND payload LIKE ? AND created_at > datetime('now', '-1 hour')",
+		"%"+experiment+"%",
+	).Scan(&count)
+	return count, err
+}
+
+// RecentResultScores returns recent RESULT event scores for an experiment to detect convergence.
+func (d *DB) RecentResultScores(experiment string, limit int) ([]float64, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := d.db.Query(
+		"SELECT score FROM results WHERE experiment = ? ORDER BY created_at DESC LIMIT ?",
+		experiment, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var scores []float64
+	for rows.Next() {
+		var s float64
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		scores = append(scores, s)
+	}
+	return scores, rows.Err()
 }
