@@ -98,7 +98,7 @@ func (s *Server) runPlaybooks(event *db.Event) {
 			ch, _ = s.db.GetChannelByName(action.Channel)
 		}
 		if ch != nil {
-			s.db.CreatePost(ch.ID, "system", nil, action.Message)
+			s.db.CreatePost(ch.ID, "_system", nil, action.Message)
 		}
 	}
 }

@@ -157,6 +157,9 @@ func (d *DB) Migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 		CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
+
+		-- Reserved system agent for playbook-generated posts
+		INSERT OR IGNORE INTO agents (id, api_key) VALUES ('_system', 'reserved-not-for-auth');
 	`)
 	return err
 }
