@@ -40,6 +40,15 @@ type Post struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type Memory struct {
+	ID        int       `json:"id"`
+	AgentID   string    `json:"agent_id"`
+	Kind      string    `json:"kind"`
+	Content   string    `json:"content"`
+	Tags      string    `json:"tags"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Result struct {
 	ID           int       `json:"id"`
 	AgentID      string    `json:"agent_id"`
@@ -137,6 +146,17 @@ func (d *DB) Migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id);
 		CREATE INDEX IF NOT EXISTS idx_results_experiment ON results(experiment);
 		CREATE INDEX IF NOT EXISTS idx_results_agent ON results(agent_id);
+
+		CREATE TABLE IF NOT EXISTS memory (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL REFERENCES agents(id),
+			kind TEXT NOT NULL CHECK(kind IN ('fact','failure','hunch')),
+			content TEXT NOT NULL,
+			tags TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
+		CREATE INDEX IF NOT EXISTS idx_memory_agent ON memory(agent_id);
 	`)
 	return err
 }
@@ -580,4 +600,59 @@ func scanResults(rows *sql.Rows) ([]Result, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// --- Memory ---
+
+func (d *DB) InsertMemory(agentID, kind, content, tags string) (*Memory, error) {
+	res, err := d.db.Exec(
+		"INSERT INTO memory (agent_id, kind, content, tags) VALUES (?, ?, ?, ?)",
+		agentID, kind, content, tags,
+	)
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	var m Memory
+	err = d.db.QueryRow(
+		"SELECT id, agent_id, kind, content, tags, created_at FROM memory WHERE id = ?", id,
+	).Scan(&m.ID, &m.AgentID, &m.Kind, &m.Content, &m.Tags, &m.CreatedAt)
+	return &m, err
+}
+
+func (d *DB) ListMemory(kind, agentID, tags string, limit, offset int) ([]Memory, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := "SELECT id, agent_id, kind, content, tags, created_at FROM memory WHERE 1=1"
+	var args []any
+	if kind != "" {
+		query += " AND kind = ?"
+		args = append(args, kind)
+	}
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if tags != "" {
+		query += " AND tags LIKE ?"
+		args = append(args, "%"+tags+"%")
+	}
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.Kind, &m.Content, &m.Tags, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		memories = append(memories, m)
+	}
+	return memories, rows.Err()
 }
